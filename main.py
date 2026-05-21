@@ -5,6 +5,10 @@ class SelfAttention(nn.Module):
     def __init__(self, embd_size, heads):
         super(SelfAttention, self).__init__()
 
+        # A head is an independent attention mechanism that learns to focus on different kinds of relationships in the input.
+        # Instead of doing attention once, transformers do it multiple times in parallel.
+        # Each parallel attention unit = one attention head.
+
         self.embd_size = embd_size
         self.heads = heads
         self.head_dim = embd_size // heads
@@ -84,7 +88,7 @@ class TransformerBlock(nn.Module):
     def forward(self, value, key, query, mask):
         attention = self.attention(value, key, query, mask)
 
-        x = self.dropout(self.norm1(attention + query))
+        x = self.dropout(self.norm1(attention + query)) # Post Normalization
 
         forward = self.feed_forward(x)
         out = self.dropout(self.norm2(forward + x))

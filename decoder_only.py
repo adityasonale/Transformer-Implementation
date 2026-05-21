@@ -23,7 +23,7 @@ class SelfAttention(nn.Module):
 
         self.fc_out = nn.Linear(embd_size, embd_size)
 
-    def forward(self, x, mask):
+    def forward(self, x, mask, kv_cache=None):
         N = x.shape[0]
         
         # Query len = Key len = Value len
@@ -43,6 +43,18 @@ class SelfAttention(nn.Module):
         query_transpose = query.permute(0, 2, 1, 3)
         keys_transpose = keys.permute(0, 2, 3, 1)
         value_transpose = values.permute(0, 2, 1, 3)
+
+        # KV Caching
+        if kv_cache is not None:
+            if "k" in kv_cache:
+                # Concatenate new K, V with cached K, V from previous steps
+                keys_transpose = torch.cat([kv_cache["k"], keys_transpose], dim=3)
+                value_transpose = torch.cat([kv_cache["v"], value_transpose], dim=2)
+
+            # Update cache with the full K, V (past + new)
+            kv_cache["k"] = keys_transpose
+            kv_cache["v"] = value_transpose
+
 
         energy = torch.matmul(query_transpose, keys_transpose)
 
