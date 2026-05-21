@@ -69,7 +69,7 @@ class SelfAttention(nn.Module):
 
         output = self.fc_out(output) # we use this linear layer to allow different heads to interact with each other
 
-        return output
+        return output, kv_cache
     
 class TransformerBlock(nn.Module):
     def __init__(self, embd_size, heads, dropout_p, forward_expansion):
@@ -88,10 +88,10 @@ class TransformerBlock(nn.Module):
 
         self.dropout = nn.Dropout(p=dropout_p)
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, kv_cache=None):
 
         # pre-normalisation 1
-        attention_output = self.attention(self.norm_1(x), mask)
+        attention_output, kv_cache = self.attention(self.norm_1(x), mask, kv_cache)
 
         x = x + self.dropout(attention_output)  
 
@@ -99,7 +99,7 @@ class TransformerBlock(nn.Module):
         ff_out = self.ffn(self.norm_2(x))
         x = x + self.dropout(ff_out)
 
-        return x
+        return x, kv_cache
 
 
 class DecoderOnlyTransformer(nn.Module):
@@ -140,14 +140,30 @@ class DecoderOnlyTransformer(nn.Module):
         mask = torch.tril(torch.ones(seq_len, seq_len)).to(self.device)
         return mask.unsqueeze(0).unsqueeze(0).expand(N, 1, seq_len, seq_len)
 
-    def forward(self, x, mask, labels=None):
+    def forward(self, x, mask, labels=None, kv_cache=None):
         N, seq_len = x.shape
-        positions = torch.arange(0, seq_len).expand(N, seq_len).to(self.device)
+        # positional embedding — two cases:
+        # 1. no cache or empty cache → full sequence, positions start from 0
+        # 2. cache has past tokens   → only new token, position continues from past_len
+        if kv_cache is not None and any("k" in layer_cache for layer_cache in kv_cache):
+            # find how many tokens are already cached by reading seq_len from shape[3]
+            # keys_transpose shape is (N, heads, heads_dim, seq_len) → shape[3] = past token count
+            # we only need to check first layer that has "k" — all layers always have same count
+            past_len = next(layer_cache["k"].shape[3] for layer_cache in kv_cache if "k" in layer_cache)
+
+            # new token's position must continue from where cache left off
+            # e.g. if 2 tokens cached → new token gets position 2, not 0
+            positions = torch.arange(past_len, past_len + seq_len).expand(N, seq_len).to(self.device)
+        else:
+            positions = torch.arange(0, seq_len).expand(N, seq_len).to(self.device)
 
         x = self.dropout(self.word_embedding(x) + self.positional_embedding(positions))
 
-        for layer in self.layers:
-            x = layer(x, mask)
+        if kv_cache is None:
+            kv_cache = [{} for _ in self.layers]
+
+        for i, layer in enumerate(self.layers):
+            x, kv_cache[i] = layer(x, mask, kv_cache[i])
 
         x = self.ln_f(x)
         out = self.fc_out(x)
@@ -156,6 +172,6 @@ class DecoderOnlyTransformer(nn.Module):
             loss_fn = nn.CrossEntropyLoss()
             # Reshape for loss: (N * seq_len, vocab_size)
             loss = loss_fn(out.view(-1, out.size(-1)), labels.view(-1))
-            return loss, out
+            return loss, out, kv_cache
 
-        return out
+        return out, kv_cache
